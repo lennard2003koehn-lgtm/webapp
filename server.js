@@ -1,64 +1,48 @@
 const express = require("express");
-const { Pool } = require("pg");
 
 const app = express();
 app.set("view engine", "ejs");
 app.use(express.urlencoded({ extended: false }));
 
-// Railway/Render liefern i.d.R. DATABASE_URL als Env-Var
-if (!process.env.DATABASE_URL) {
-  console.error("Missing DATABASE_URL env var");
-  process.exit(1);
-}
+// In-Memory "Datenbank" (RAM)
+// Hinweis: Bei Neustart/Deploy ist die Liste wieder leer.
+let nextId = 1;
+const todos = [];
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL.includes("sslmode=") ? undefined : { rejectUnauthorized: false }
+app.get("/", (req, res) => {
+  // Neueste zuerst
+  const sorted = [...todos].sort((a, b) => b.id - a.id);
+  res.render("index", { todos: sorted });
 });
 
-async function initDb() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS todos (
-      id SERIAL PRIMARY KEY,
-      text TEXT NOT NULL,
-      done BOOLEAN NOT NULL DEFAULT false,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-    );
-  `);
-}
-
-app.get("/", async (req, res) => {
-  const { rows } = await pool.query(
-    "SELECT id, text, done, created_at FROM todos ORDER BY id DESC;"
-  );
-  res.render("index", { todos: rows });
-});
-
-// Dynamisch nachweisbar: POST verarbeitet Formulardaten und speichert in DB
-app.post("/add", async (req, res) => {
+// Dynamisch nachweisbar: POST verarbeitet Eingabe und verändert serverseitigen Zustand (Array)
+app.post("/add", (req, res) => {
   const text = (req.body.text || "").trim();
   if (text.length === 0) return res.redirect("/");
-  await pool.query("INSERT INTO todos(text) VALUES ($1);", [text]);
+
+  todos.push({
+    id: nextId++,
+    text,
+    done: false,
+    created_at: new Date().toISOString()
+  });
+
   res.redirect("/");
 });
 
-app.post("/toggle/:id", async (req, res) => {
+app.post("/toggle/:id", (req, res) => {
   const id = Number(req.params.id);
-  await pool.query("UPDATE todos SET done = NOT done WHERE id = $1;", [id]);
+  const t = todos.find(x => x.id === id);
+  if (t) t.done = !t.done;
   res.redirect("/");
 });
 
-app.post("/delete/:id", async (req, res) => {
+app.post("/delete/:id", (req, res) => {
   const id = Number(req.params.id);
-  await pool.query("DELETE FROM todos WHERE id = $1;", [id]);
+  const idx = todos.findIndex(x => x.id === id);
+  if (idx !== -1) todos.splice(idx, 1);
   res.redirect("/");
 });
 
 const port = process.env.PORT || 3000;
-
-initDb()
-  .then(() => app.listen(port, () => console.log(`Listening on ${port}`)))
-  .catch((err) => {
-    console.error("DB init failed:", err);
-    process.exit(1);
-  });
+app.listen(port, () => console.log(`Listening on ${port}`));
